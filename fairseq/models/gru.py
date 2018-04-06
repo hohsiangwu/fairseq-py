@@ -130,7 +130,7 @@ class GRUDecoder(FairseqIncrementalDecoder):
         bsz, seqlen = input_tokens.size()
 
         # get outputs from encoder
-        encoder_outs, _, _ = encoder_out
+        encoder_outs, _ = encoder_out
         srclen = encoder_outs.size(0)
 
         # embed tokens
