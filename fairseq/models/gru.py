@@ -48,14 +48,13 @@ class GRUEncoder(FairseqEncoder):
         # B x T x C -> T x B x C
         x = x.transpose(0, 1)
 
-        final_hiddens, final_cells = [], []
+        final_hiddens = []
         outs = [x[j] for j in range(seqlen)]
         for i, rnn in enumerate(self.layers):
             hidden = Variable(x.data.new(bsz, embed_dim).zero_())
-            cell = Variable(x.data.new(bsz, embed_dim).zero_())
             for j in range(seqlen):
                 # recurrent cell
-                hidden, cell = rnn(outs[j], (hidden, cell))
+                hidden = rnn(outs[j], hidden)
 
                 # store the most recent hidden state in outs, either to be used
                 # as the input for the next layer, or as the final output
@@ -63,14 +62,12 @@ class GRUEncoder(FairseqEncoder):
 
             # save the final hidden and cell states for every layer
             final_hiddens.append(hidden)
-            final_cells.append(cell)
 
         # collect outputs across time steps
         x = torch.cat(outs, dim=0).view(seqlen, bsz, embed_dim)
         final_hiddens = torch.cat(final_hiddens, dim=0).view(num_layers, bsz, embed_dim)
-        final_cells = torch.cat(final_cells, dim=0).view(num_layers, bsz, embed_dim)
 
-        return x, final_hiddens, final_cells
+        return x, final_hiddens
 
     def max_positions(self):
         """Maximum input length supported by the encoder."""
@@ -148,11 +145,10 @@ class GRUDecoder(FairseqIncrementalDecoder):
         prev_hiddens = self.get_incremental_state('prev_hiddens')
         if not prev_hiddens:
             # first time step, initialize previous states
-            prev_hiddens, prev_cells = self._init_prev_states(input_tokens, encoder_out)
+            prev_hiddens = self._init_prev_states(input_tokens, encoder_out)
             input_feed = Variable(x.data.new(bsz, embed_dim).zero_())
         else:
             # previous states are cached
-            prev_cells = self.get_incremental_state('prev_cells')
             input_feed = self.get_incremental_state('input_feed')
 
         attn_scores = Variable(x.data.new(srclen, seqlen, bsz).zero_())
@@ -163,14 +159,13 @@ class GRUDecoder(FairseqIncrementalDecoder):
 
             for i, rnn in enumerate(self.layers):
                 # recurrent cell
-                hidden, cell = rnn(input, (prev_hiddens[i], prev_cells[i]))
+                hidden = rnn(input, prev_hiddens[i])
 
                 # hidden state becomes the input to the next layer
                 input = F.dropout(hidden, p=self.dropout_out, training=self.training)
 
                 # save state for next time step
                 prev_hiddens[i] = hidden
-                prev_cells[i] = cell
 
             # apply attention using the last layer's hidden state
             out, attn_scores[:, j, :] = self.attention(hidden, encoder_outs)
@@ -184,7 +179,6 @@ class GRUDecoder(FairseqIncrementalDecoder):
 
         # cache previous states (no-op except during incremental generation)
         self.set_incremental_state('prev_hiddens', prev_hiddens)
-        self.set_incremental_state('prev_cells', prev_cells)
         self.set_incremental_state('input_feed', input_feed)
 
         # collect outputs across time steps
@@ -218,7 +212,6 @@ class GRUDecoder(FairseqIncrementalDecoder):
             self.set_incremental_state(key, new)
 
         reorder_state('prev_hiddens')
-        reorder_state('prev_cells')
         reorder_state('input_feed')
 
     def max_positions(self):
@@ -226,11 +219,10 @@ class GRUDecoder(FairseqIncrementalDecoder):
         return int(1e5)  # an arbitrary large number
 
     def _init_prev_states(self, input_tokens, encoder_out):
-        _, encoder_hiddens, encoder_cells = encoder_out
+        _, encoder_hiddens = encoder_out
         num_layers = len(self.layers)
         prev_hiddens = [encoder_hiddens[i] for i in range(num_layers)]
-        prev_cells = [encoder_cells[i] for i in range(num_layers)]
-        return prev_hiddens, prev_cells
+        return prev_hiddens
 
 
 def Embedding(num_embeddings, embedding_dim, padding_idx):
